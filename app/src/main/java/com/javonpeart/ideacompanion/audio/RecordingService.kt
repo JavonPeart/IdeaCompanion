@@ -84,7 +84,11 @@ class RecordingService : Service() {
         stopForeground(STOP_FOREGROUND_REMOVE)
         if (valid && target != null && target.length() > 0) {
             scope.launch {
-                try { (application as IdeaApp).repository.saveRecording(target.absolutePath, System.currentTimeMillis() - started, started) }
+                try {
+                    val app = application as IdeaApp
+                    val id = app.repository.saveRecording(target.absolutePath, System.currentTimeMillis() - started, started)
+                    if (app.modelFile.isFile) app.transcribe(id)
+                }
                 catch (e: Exception) { state.value = RecordingState(error = "Could not save recording: ${e.message}") }
                 finally { stopSelf() }
             }

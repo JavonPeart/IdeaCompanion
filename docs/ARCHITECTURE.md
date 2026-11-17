@@ -6,11 +6,11 @@ The app is a single Android module using Compose for UI, a foreground microphone
 
 Recording and review are implemented as an initial vertical slice. The recording service finalizes audio before inserting metadata. Cancellation removes the temporary file. Service termination cancels an unfinished recording. The application disables Android backup and has no INTERNET permission.
 
-The current build has no whisper.cpp native library or model import flow. Typed conversation commands now use a strict leading activation phrase, stored ideas, and optional Android TTS that selects a non-network English voice. Activation phrase and speech preference persist in DataStore. Voice input, widget access, and comprehensive automated tests remain to be implemented. The UI explicitly marks voice transcription unavailable.
+Whisper integration has a pinned upstream submodule, CMake/JNI bridge, AAC decoding to mono 16 kHz float PCM, explicit model import, automatic transcription after recording when a model exists, and retry/status handling. Android NDK 27.0.12077973 and CMake 3.22.1 are installed on the development computer. The native APK built, and the tiny English model ran on the connected phone, storing a transcript in Room. Accuracy on the ambient test recording was not independently validated. Typed conversation commands use a strict leading activation phrase, stored ideas, and optional Android TTS that selects a non-network English voice. Activation phrase and speech preference persist in DataStore. Voice input and widget access remain to be implemented.
 
 ## Next milestones
 
-1. Add a `TranscriptionEngine` with whisper.cpp JNI, a model import screen, PCM conversion, and durable background work.
+1. Replace app-scoped transcription jobs with durable WorkManager jobs and add silence handling to avoid misleading transcripts from quiet recordings.
 2. Add relevance ranking and date filtering to indexed search.
 3. Feed a deliberately started listening session through the offline transcription engine into the existing command router.
 4. Add a widget that opens a visible recording activity.

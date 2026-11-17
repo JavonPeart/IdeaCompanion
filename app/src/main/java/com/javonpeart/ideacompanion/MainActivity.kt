@@ -30,6 +30,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val repo = (application as IdeaApp).repository
+        val app = application as IdeaApp
         val settingsRepo = (application as IdeaApp).settings
         setContent {
             MaterialTheme {
@@ -51,6 +52,16 @@ class MainActivity : ComponentActivity() {
                     if (granted) ContextCompat.startForegroundService(context, Intent(context, RecordingService::class.java).setAction(RecordingService.START))
                     else permissionError = true
                 }
+                var importMessage by remember { mutableStateOf("") }
+                val modelImport = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+                    if (uri != null) scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                        try {
+                            app.modelFile.parentFile?.mkdirs()
+                            context.contentResolver.openInputStream(uri)!!.use { input -> app.modelFile.outputStream().use { input.copyTo(it) } }
+                            importMessage = "Model imported (${app.modelFile.length() / 1048576} MB)"
+                        } catch (e: Exception) { app.modelFile.delete(); importMessage = "Import failed: ${e.message}" }
+                    }
+                }
                 fun dispatch(action: String) { context.startService(Intent(context, RecordingService::class.java).setAction(action)) }
                 Scaffold(bottomBar = {
                     NavigationBar {
@@ -62,12 +73,14 @@ class MainActivity : ComponentActivity() {
                     Column(Modifier.padding(padding).padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         when {
                             selected != null -> {
-                                val idea = selected!!
+                                val idea = ideas.firstOrNull { it.id == selected!!.id } ?: selected!!
                                 Text(idea.title ?: "Untitled idea", style = MaterialTheme.typography.headlineMedium)
                                 Text(DateFormat.getDateTimeInstance().format(Date(idea.createdAt)))
                                 Text("Transcription: ${idea.transcriptionStatus}")
-                                var title by remember(idea.id) { mutableStateOf(idea.title.orEmpty()) }
-                                var transcript by remember(idea.id) { mutableStateOf(idea.transcript) }
+                                idea.transcriptionError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                                Button(onClick = { app.transcribe(idea.id) }) { Text("Transcribe / retry") }
+                                var title by remember(idea.id, idea.updatedAt) { mutableStateOf(idea.title.orEmpty()) }
+                                var transcript by remember(idea.id, idea.updatedAt) { mutableStateOf(idea.transcript) }
                                 OutlinedTextField(title, { title = it }, label = { Text("Title") })
                                 OutlinedTextField(transcript, { transcript = it }, label = { Text("Transcript") }, minLines = 4)
                                 Button(onClick = { scope.launch { repo.update(idea.copy(title = title.ifBlank { null }, transcript = transcript)); selected = null } }) { Text("Save edits") }
@@ -141,8 +154,11 @@ class MainActivity : ComponentActivity() {
                                 Button(onClick = { if (phrase.isNotBlank()) scope.launch { settingsRepo.setPhrase(phrase) } }) { Text("Save phrase") }
                                 Row { Text("Speak responses"); Switch(checked = settings.speechEnabled, onCheckedChange = { scope.launch { settingsRepo.setSpeechEnabled(it) } }) }
                                 Text(if (speech.available) "Offline English voice available" else "No offline English voice available")
+                                Text(if (app.modelFile.isFile) "Whisper model: ${app.modelFile.length() / 1048576} MB" else "No Whisper model imported")
+                                Button(onClick = { modelImport.launch(arrayOf("application/octet-stream", "*/*")) }) { Text("Import Whisper model") }
+                                if (importMessage.isNotBlank()) Text(importMessage)
                                 Text("Recordings and transcripts stay in app-private storage on this device. Android backup is disabled.")
-                                Text("Offline voice transcription is not available in this build.")
+                                Text("Voice command capture is not yet available in this build.")
                             }
                         }
                     }
