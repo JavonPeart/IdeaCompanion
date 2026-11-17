@@ -19,6 +19,8 @@ class WhisperEngine : TranscriptionEngine {
         require(modelFile.isFile && modelFile.length() > 1024) { "Import a valid Whisper model first" }
         val pcm = decode(audioFile)
         require(pcm.isNotEmpty()) { "Recording contains no decodable audio" }
+        val rms = kotlin.math.sqrt(pcm.sumOf { (it * it).toDouble() } / pcm.size)
+        require(rms >= 0.004) { "Audio is too quiet for a reliable transcript" }
         transcribeNative(modelFile.absolutePath, pcm)?.trim() ?: error("Whisper inference failed")
     }
 

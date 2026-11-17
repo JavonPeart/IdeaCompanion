@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.MediaPlayer
+import android.media.MediaRecorder
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -22,7 +23,11 @@ import com.javonpeart.ideacompanion.audio.RecordingService
 import com.javonpeart.ideacompanion.data.Idea
 import com.javonpeart.ideacompanion.search.SearchQuery
 import com.javonpeart.ideacompanion.conversation.*
+import com.javonpeart.ideacompanion.transcription.WhisperEngine
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.delay
 import java.text.DateFormat
 import java.util.Date
 
@@ -37,6 +42,8 @@ class MainActivity : ComponentActivity() {
                 val context = LocalContext.current
                 val scope = rememberCoroutineScope()
                 val state by RecordingService.state.collectAsState()
+                var recordingNow by remember { mutableLongStateOf(System.currentTimeMillis()) }
+                LaunchedEffect(state.active) { while (state.active) { recordingNow = System.currentTimeMillis(); delay(1000) } }
                 val ideas by repo.all().collectAsState(initial = emptyList())
                 val settings by settingsRepo.settings.collectAsState(initial = com.javonpeart.ideacompanion.settings.Settings("Hello Companion", true))
                 val speech = remember { SpeechOutput(context) }
@@ -52,6 +59,10 @@ class MainActivity : ComponentActivity() {
                     if (granted) ContextCompat.startForegroundService(context, Intent(context, RecordingService::class.java).setAction(RecordingService.START))
                     else permissionError = true
                 }
+                var voicePermissionError by remember { mutableStateOf(false) }
+                val voicePermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+                    voicePermissionError = !granted
+                }
                 var importMessage by remember { mutableStateOf("") }
                 val modelImport = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
                     if (uri != null) scope.launch(kotlinx.coroutines.Dispatchers.IO) {
@@ -60,6 +71,20 @@ class MainActivity : ComponentActivity() {
                             context.contentResolver.openInputStream(uri)!!.use { input -> app.modelFile.outputStream().use { input.copyTo(it) } }
                             importMessage = "Model imported (${app.modelFile.length() / 1048576} MB)"
                         } catch (e: Exception) { app.modelFile.delete(); importMessage = "Import failed: ${e.message}" }
+                    }
+                }
+                var gemmaImportMessage by remember { mutableStateOf("") }
+                val gemmaImport = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+                    if (uri != null) scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                        val temporary = java.io.File(app.gemmaFile.parentFile, "gemma-import.tmp")
+                        try {
+                            app.gemmaFile.parentFile?.mkdirs()
+                            context.contentResolver.openInputStream(uri)!!.use { input -> temporary.outputStream().use { input.copyTo(it) } }
+                            require(temporary.length() > 100_000_000) { "Selected file is too small for a Gemma model" }
+                            if (app.gemmaFile.exists()) app.gemmaFile.delete()
+                            check(temporary.renameTo(app.gemmaFile)) { "Could not finalize model import" }
+                            gemmaImportMessage = "Gemma model imported"
+                        } catch (e: Exception) { temporary.delete(); gemmaImportMessage = "Gemma import failed: ${e.message}" }
                     }
                 }
                 fun dispatch(action: String) { context.startService(Intent(context, RecordingService::class.java).setAction(action)) }
@@ -99,7 +124,7 @@ class MainActivity : ComponentActivity() {
                                 Text("Idea Companion", style = MaterialTheme.typography.headlineLarge)
                                 Text("Capture a thought privately, whenever you choose.")
                                 if (state.active) {
-                                    Text("Recording…")
+                                    Text("Recording… ${(recordingNow - state.startedAt).coerceAtLeast(0) / 1000}s")
                                     Button(onClick = { dispatch(RecordingService.STOP) }) { Text("Stop and save") }
                                     TextButton(onClick = { dispatch(RecordingService.CANCEL) }) { Text("Cancel recording") }
                                 } else Button(onClick = {
@@ -124,12 +149,17 @@ class MainActivity : ComponentActivity() {
                             }
                             page == "Conversation" -> {
                                 Text("Conversation", style = MaterialTheme.typography.headlineMedium)
-                                Text("Type an activated command to search your saved ideas. Voice input requires the offline transcription engine.")
+                                Text("Speak or type an activated command. Listening starts only when you tap Start listening.")
                                 var request by remember { mutableStateOf("") }
                                 var response by remember { mutableStateOf("") }
-                                OutlinedTextField(request, { request = it }, label = { Text("Command") })
-                                Button(onClick = {
-                                    val command = CommandRouter.parse(request, settings.activationPhrase)
+                                var gemmaResponse by remember { mutableStateOf("") }
+                                var matchedIdeas by remember { mutableStateOf<List<Idea>>(emptyList()) }
+                                var listening by remember { mutableStateOf(false) }
+                                var recognizing by remember { mutableStateOf(false) }
+                                var recorder by remember { mutableStateOf<MediaRecorder?>(null) }
+                                var commandFile by remember { mutableStateOf<java.io.File?>(null) }
+                                fun runCommand(text: String) {
+                                    val command = CommandRouter.parse(text, settings.activationPhrase)
                                     val matches = when (command) {
                                         Command.Recent -> ideas.take(5)
                                         Command.Latest -> ideas.take(1)
@@ -138,14 +168,71 @@ class MainActivity : ComponentActivity() {
                                         Command.Yesterday -> ideas.filter { java.time.Instant.ofEpochMilli(it.createdAt).atZone(java.time.ZoneId.systemDefault()).toLocalDate() == java.time.LocalDate.now().minusDays(1) }
                                         else -> emptyList()
                                     }
+                                    matchedIdeas = matches
+                                    gemmaResponse = ""
                                     response = when (command) {
                                         null -> "Activation phrase required at the beginning."
                                         Command.Unsupported -> "That command is not available in this prototype."
                                         else -> if (matches.isEmpty()) "No matching recorded ideas." else matches.joinToString(". ") { it.title ?: it.transcript.ifBlank { "Untitled recording from ${DateFormat.getDateTimeInstance().format(Date(it.createdAt))}" } }
                                     }
                                     if (command != null && settings.speechEnabled) speech.speak(response)
-                                }) { Text("Run command") }
+                                }
+                                DisposableEffect(page) { onDispose {
+                                    if (recorder != null) { try { recorder?.stop() } catch (_: Exception) {}; recorder?.release(); recorder = null }
+                                    commandFile?.delete(); commandFile = null; listening = false
+                                } }
+                                OutlinedTextField(request, { request = it }, label = { Text("Command") })
+                                Button(onClick = { runCommand(request) }) { Text("Run command") }
+                                if (listening) {
+                                    Text("Listening… microphone active")
+                                    Button(onClick = {
+                                        val active = recorder; recorder = null; listening = false
+                                        val audio = commandFile; commandFile = null
+                                        var finalized = true
+                                        try { active?.stop() } catch (_: Exception) { finalized = false }
+                                        active?.release()
+                                        if (finalized && audio != null) {
+                                            recognizing = true
+                                            scope.launch {
+                                                try {
+                                                    val text = withContext(Dispatchers.Default) { WhisperEngine().transcribe(audio, app.modelFile) }
+                                                    request = text
+                                                    runCommand(text)
+                                                } catch (e: Exception) { response = "Voice recognition failed: ${e.message}" }
+                                                finally { audio.delete(); recognizing = false }
+                                            }
+                                        } else { audio?.delete(); response = "Could not finalize voice command" }
+                                    }) { Text("Stop listening and search") }
+                                } else Button(enabled = !recognizing && app.modelFile.isFile, onClick = {
+                                    if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                                        voicePermission.launch(Manifest.permission.RECORD_AUDIO)
+                                    } else try {
+                                        val audio = java.io.File.createTempFile("command_", ".m4a", context.cacheDir)
+                                        val active = if (android.os.Build.VERSION.SDK_INT >= 31) MediaRecorder(context) else @Suppress("DEPRECATION") MediaRecorder()
+                                        active.setAudioSource(MediaRecorder.AudioSource.MIC)
+                                        active.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+                                        active.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+                                        active.setOutputFile(audio.absolutePath)
+                                        active.prepare(); active.start()
+                                        commandFile = audio; recorder = active; listening = true
+                                    } catch (e: Exception) { response = "Could not start listening: ${e.message}" }
+                                }) { Text(if (recognizing) "Recognizing…" else "Start listening") }
+                                if (voicePermissionError) Text("Microphone permission is needed for voice commands")
                                 if (response.isNotBlank()) Text(response)
+                                if (app.gemmaFile.isFile && matchedIdeas.isNotEmpty()) {
+                                    Button(onClick = {
+                                        gemmaResponse = "Generating an evidence-based draft…"
+                                        scope.launch {
+                                            gemmaResponse = try { GemmaEngine().summarize(app.gemmaFile, request, matchedIdeas) }
+                                            catch (e: Exception) { "Gemma unavailable: ${e.message}" }
+                                        }
+                                    }) { Text("Ask local Gemma about these ideas") }
+                                    if (gemmaResponse.isNotBlank()) {
+                                        Text("Gemma draft — verify against the recorded ideas")
+                                        Text(gemmaResponse)
+                                        matchedIdeas.forEach { Text("[${it.id}] ${it.title ?: it.transcript.ifBlank { "Original audio available in Library" }}") }
+                                    }
+                                }
                             }
                             else -> {
                                 Text("Settings", style = MaterialTheme.typography.headlineMedium)
@@ -157,6 +244,9 @@ class MainActivity : ComponentActivity() {
                                 Text(if (app.modelFile.isFile) "Whisper model: ${app.modelFile.length() / 1048576} MB" else "No Whisper model imported")
                                 Button(onClick = { modelImport.launch(arrayOf("application/octet-stream", "*/*")) }) { Text("Import Whisper model") }
                                 if (importMessage.isNotBlank()) Text(importMessage)
+                                Text(if (app.gemmaFile.isFile) "Local Gemma model: ${app.gemmaFile.length() / 1048576} MB" else "No local Gemma model imported")
+                                Button(onClick = { gemmaImport.launch(arrayOf("application/octet-stream", "*/*")) }) { Text("Import Gemma .litertlm") }
+                                if (gemmaImportMessage.isNotBlank()) Text(gemmaImportMessage)
                                 Text("Recordings and transcripts stay in app-private storage on this device. Android backup is disabled.")
                                 Text("Voice command capture is not yet available in this build.")
                             }

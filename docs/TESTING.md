@@ -13,3 +13,7 @@ Background recording, notification stop, deletion, permission denial, interrupti
 ## Whisper integration device test
 
 Official NDK 27.0.12077973 and CMake 3.22.1 archives were downloaded and their SHA-1 checksums matched Google's SDK manifest. The model `ggml-tiny.en.bin` matched the publisher's SHA-256 (`921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f`). `gradlew.bat :app:assembleDebug :app:testDebugUnitTest --offline` passed with the native library. The APK installed on the Samsung SM-G991U1; the model imported into app-private files (77,704,715 bytes). A retry of the existing short recording reached `COMPLETE` and stored a nonempty transcript. The first retry exposed an absent optional PCM encoding field in the device decoder; the fallback was fixed and the second run completed. The resulting words were not checked against audible speech, so transcription accuracy and silence hallucination behavior remain unverified. The model also remains in the phone's Downloads folder as an import source.
+
+## Current update
+
+`gradlew.bat :app:assembleDebug :app:testDebugUnitTest --offline` passed after adding WorkManager, quiet-audio rejection, optional Gemma, manual voice command capture, widget, and recording timer. Evidence citation tests passed. The APK installed and launched on the Samsung, but the phone was locked when UI testing resumed. The new voice, worker, widget, and Gemma generation paths remain unverified on device. Gemma model provisioning awaits license acceptance and a compatible `.litertlm` model file.
