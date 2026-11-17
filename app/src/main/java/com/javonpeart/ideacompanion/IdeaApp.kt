@@ -15,7 +15,7 @@ class IdeaApp : Application() {
     val repository by lazy { IdeaRepository(database.ideas()) }
     val settings by lazy { SettingsRepository(this) }
     val modelFile get() = File(filesDir, "models/ggml-tiny.en.bin")
-    val gemmaFile get() = File(filesDir, "models/gemma.litertlm")
+    val conversationModelFile get() = File(filesDir, "models/lfm3-1.7b-q4_k_m.gguf")
     fun transcribe(id: Long) {
         val request = OneTimeWorkRequestBuilder<TranscriptionWorker>()
             .setInputData(workDataOf(TranscriptionWorker.ID to id)).build()

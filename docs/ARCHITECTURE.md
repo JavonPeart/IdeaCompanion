@@ -18,4 +18,4 @@ Whisper integration has a pinned upstream submodule, CMake/JNI bridge, AAC decod
 
 ## Optional local LLM
 
-Keep command retrieval deterministic and available without a model. LiteRT-LM 0.8.0 now supports optional local Gemma text generation from an explicitly imported `.litertlm` file. The app supplies only retrieved snippets as context, requires known idea-ID citations, labels output as an AI draft, and displays its sources. Citation checking cannot prove factual accuracy. The Gemma model is license-gated and has not been imported or tested on the phone.
+Keep command retrieval deterministic and available without a model. Optional local generation now uses llama.cpp with the already downloaded Ollama LFM3 GGUF file. The app supplies only retrieved snippets as context, requires known idea-ID citations, labels output as an AI draft, and displays its sources. Citation checking cannot prove factual accuracy. The model is stored in app-private storage and generation runs on the phone CPU without an INTERNET permission.

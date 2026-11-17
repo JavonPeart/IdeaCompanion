@@ -11,6 +11,8 @@ import androidx.activity.compose.setContent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
@@ -73,18 +75,19 @@ class MainActivity : ComponentActivity() {
                         } catch (e: Exception) { app.modelFile.delete(); importMessage = "Import failed: ${e.message}" }
                     }
                 }
-                var gemmaImportMessage by remember { mutableStateOf("") }
-                val gemmaImport = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+                var conversationImportMessage by remember { mutableStateOf("") }
+                val conversationImport = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
                     if (uri != null) scope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                        val temporary = java.io.File(app.gemmaFile.parentFile, "gemma-import.tmp")
+                        val temporary = java.io.File(app.conversationModelFile.parentFile, "conversation-import.tmp")
                         try {
-                            app.gemmaFile.parentFile?.mkdirs()
+                            app.conversationModelFile.parentFile?.mkdirs()
                             context.contentResolver.openInputStream(uri)!!.use { input -> temporary.outputStream().use { input.copyTo(it) } }
-                            require(temporary.length() > 100_000_000) { "Selected file is too small for a Gemma model" }
-                            if (app.gemmaFile.exists()) app.gemmaFile.delete()
-                            check(temporary.renameTo(app.gemmaFile)) { "Could not finalize model import" }
-                            gemmaImportMessage = "Gemma model imported"
-                        } catch (e: Exception) { temporary.delete(); gemmaImportMessage = "Gemma import failed: ${e.message}" }
+                            require(temporary.length() > 500_000_000) { "Selected file is too small for the LFM3 GGUF model" }
+                            require(temporary.inputStream().use { String(it.readNBytes(4), Charsets.US_ASCII) } == "GGUF") { "Selected file is not a GGUF model" }
+                            if (app.conversationModelFile.exists()) app.conversationModelFile.delete()
+                            check(temporary.renameTo(app.conversationModelFile)) { "Could not finalize model import" }
+                            conversationImportMessage = "Local conversation model imported"
+                        } catch (e: Exception) { temporary.delete(); conversationImportMessage = "Model import failed: ${e.message}" }
                     }
                 }
                 fun dispatch(action: String) { context.startService(Intent(context, RecordingService::class.java).setAction(action)) }
@@ -148,11 +151,12 @@ class MainActivity : ComponentActivity() {
                                 } }
                             }
                             page == "Conversation" -> {
+                                Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                                 Text("Conversation", style = MaterialTheme.typography.headlineMedium)
                                 Text("Speak or type an activated command. Listening starts only when you tap Start listening.")
                                 var request by remember { mutableStateOf("") }
                                 var response by remember { mutableStateOf("") }
-                                var gemmaResponse by remember { mutableStateOf("") }
+                                var modelResponse by remember { mutableStateOf("") }
                                 var matchedIdeas by remember { mutableStateOf<List<Idea>>(emptyList()) }
                                 var listening by remember { mutableStateOf(false) }
                                 var recognizing by remember { mutableStateOf(false) }
@@ -169,7 +173,7 @@ class MainActivity : ComponentActivity() {
                                         else -> emptyList()
                                     }
                                     matchedIdeas = matches
-                                    gemmaResponse = ""
+                                    modelResponse = ""
                                     response = when (command) {
                                         null -> "Activation phrase required at the beginning."
                                         Command.Unsupported -> "That command is not available in this prototype."
@@ -219,19 +223,20 @@ class MainActivity : ComponentActivity() {
                                 }) { Text(if (recognizing) "Recognizing…" else "Start listening") }
                                 if (voicePermissionError) Text("Microphone permission is needed for voice commands")
                                 if (response.isNotBlank()) Text(response)
-                                if (app.gemmaFile.isFile && matchedIdeas.isNotEmpty()) {
+                                if (app.conversationModelFile.isFile && matchedIdeas.isNotEmpty()) {
                                     Button(onClick = {
-                                        gemmaResponse = "Generating an evidence-based draft…"
+                                        modelResponse = "Generating an evidence-based draft on this phone. This may take a few minutes…"
                                         scope.launch {
-                                            gemmaResponse = try { GemmaEngine().summarize(app.gemmaFile, request, matchedIdeas) }
-                                            catch (e: Exception) { "Gemma unavailable: ${e.message}" }
+                                            modelResponse = try { LocalGgufEngine().summarize(app.conversationModelFile, request, matchedIdeas) }
+                                            catch (e: Exception) { "Local model unavailable: ${e.message}" }
                                         }
-                                    }) { Text("Ask local Gemma about these ideas") }
-                                    if (gemmaResponse.isNotBlank()) {
-                                        Text("Gemma draft — verify against the recorded ideas")
-                                        Text(gemmaResponse)
-                                        matchedIdeas.forEach { Text("[${it.id}] ${it.title ?: it.transcript.ifBlank { "Original audio available in Library" }}") }
+                                    }) { Text("Ask local model about these ideas") }
+                                    if (modelResponse.isNotBlank()) {
+                                        if (!modelResponse.startsWith("Local model unavailable:")) Text("Local model draft — verify against the recorded ideas")
+                                        Text(modelResponse)
+                                        if (!modelResponse.startsWith("Local model unavailable:")) matchedIdeas.forEach { Text("[${it.id}] ${it.title ?: it.transcript.ifBlank { "Original audio available in Library" }}") }
                                     }
+                                }
                                 }
                             }
                             else -> {
@@ -244,11 +249,11 @@ class MainActivity : ComponentActivity() {
                                 Text(if (app.modelFile.isFile) "Whisper model: ${app.modelFile.length() / 1048576} MB" else "No Whisper model imported")
                                 Button(onClick = { modelImport.launch(arrayOf("application/octet-stream", "*/*")) }) { Text("Import Whisper model") }
                                 if (importMessage.isNotBlank()) Text(importMessage)
-                                Text(if (app.gemmaFile.isFile) "Local Gemma model: ${app.gemmaFile.length() / 1048576} MB" else "No local Gemma model imported")
-                                Button(onClick = { gemmaImport.launch(arrayOf("application/octet-stream", "*/*")) }) { Text("Import Gemma .litertlm") }
-                                if (gemmaImportMessage.isNotBlank()) Text(gemmaImportMessage)
+                                Text(if (app.conversationModelFile.isFile) "Local Ollama GGUF model: ${app.conversationModelFile.length() / 1048576} MB" else "No local conversation model imported")
+                                Button(onClick = { conversationImport.launch(arrayOf("application/octet-stream", "*/*")) }) { Text("Import LFM3 GGUF from Ollama") }
+                                if (conversationImportMessage.isNotBlank()) Text(conversationImportMessage)
                                 Text("Recordings and transcripts stay in app-private storage on this device. Android backup is disabled.")
-                                Text("Voice command capture is not yet available in this build.")
+                                Text("Voice commands start only when you tap Start listening.")
                             }
                         }
                     }

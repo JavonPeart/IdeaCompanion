@@ -32,7 +32,6 @@ dependencies {
     kapt("androidx.room:room-compiler:2.8.5")
     implementation("androidx.datastore:datastore-preferences:1.1.1")
     implementation("androidx.work:work-runtime-ktx:2.9.0")
-    implementation("com.google.ai.edge.litertlm:litertlm-android:0.8.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     testImplementation("junit:junit:4.13.2")
 }

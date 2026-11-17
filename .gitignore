@@ -6,3 +6,5 @@ local.properties
 .local-models/
 **/.cxx/
 .local-maven/
+.kotlin/
+gradle/gradle-daemon-jvm.properties
